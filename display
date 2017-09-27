@@ -1,0 +1,168 @@
+#!/usr/bin/perl
+use strict; use warnings;
+use Term::ReadKey;
+use lib ".";
+use bansi;
+
+$|=1;
+
+my $readkey_delay = 1; # 1s delay for input ESC sequences
+my $display;
+my ($brightness, $gamma);
+my ($brightmin, $brightmax, $brightstep) = (0,5,0.05);
+my ($gammamin, $gammamax, $gammastep) = (0,3,0.05);
+my ($twidth) = (GetTerminalSize())[0];
+if (!$twidth || $twidth !~ /^\d/) {
+	warn "Can't get term width; using 80";
+	$twidth = 80;
+}
+
+ReadMode 3; # cbreak!
+my @opts = (
+	{ ch=>"q", desc=>"Quit" },
+	{ ch=>"b", desc=>"Braghtniss" },
+	{ ch=>"g", desc=>"Gammer" },
+);
+sub menu {
+	for my $i (0 .. $#opts) {
+		printf("($yel%s$rst) $bcya%s$rst\n",
+			$opts[$i]->{ch}, $opts[$i]->{desc});
+	}
+}
+sub showrange {
+	my ($cur, $min, $max) = @_;
+	my $grange = $max-$min;
+	#print "max min: $gammamax - $gammamin\n";
+	#print "Range: $grange.\n";
+	#print "Curgamma: $gamma\n";
+	#print "Offset: ", $gamma-$gammamin, ".\n";
+	my $percd = ($cur-$min)/$grange;
+	#print "Percentage: $percd\n";
+	#print "Width: $twidth\n";
+	my $barw = $twidth-9;
+	#print "Bar Width: $barw\n";
+	printf("$whi% 2.2f ", $cur);
+	print "$bcya\[$rst";
+	print "=" x int($barw * $percd);
+	print "${yel}O$rst";
+	print "=" x int($barw * (1-$percd));
+	print "$bcya]$rst";
+	print "\r";
+}
+sub get_keystroke {
+	my $key = ReadKey(0);
+	my $str="\033";
+	return $key if $key ne "\033";  # If not ESC, we're done
+	do {
+		$key = ReadKey(0);
+		$str .= $key;
+	} until $key =~ /\w/;
+	#$key = ReadKey($readkey_delay);
+	#return "\033" if !defined $key;   # Timeout, return the ESC
+	#return undef if $key ne "[";      # Ignore unknown sequences
+	#return $key;
+	return $str;
+}
+sub setgamma {
+	my $g = shift;
+	$g = sprintf("%.03f", $g);
+	system("xrandr --output $display --gamma $g:$g:$g");
+}
+sub setbright {
+	my $g = shift;
+	$g = sprintf("%.03f", $g);
+	system("xrandr --output $display --brightness $g");
+}
+sub brightness {
+	my $curv = $brightness;
+	my $key;
+	print "\nq to quit, Enter to return to menu.\n";
+	showrange($curv, $brightmin, $brightmax);
+	do {
+		$key = get_keystroke();
+		if ($key eq "h" || $key eq "\033[D") {
+			$curv -= $brightstep;
+			if ($curv < $brightmin) { $curv = $brightmin; }
+			showrange($curv, $brightmin, $brightmax);
+			setbright($curv);
+		} elsif ($key eq "l" || $key eq "\033[C") {
+			$curv += $brightstep;
+			if ($curv > $brightmax) { $curv = $brightmax; }
+			showrange($curv, $brightmin, $brightmax);
+			setbright($curv);
+		} elsif ($key eq "\n" || $key eq "\r") {
+			$key = "";
+		}
+	} until (lc $key eq "q" || $key eq "");
+	print "\n";
+	return $key;
+}
+sub gamma {
+	my $curg = ($$gamma[0]+$$gamma[1]+$$gamma[2])/3; # Just use avg
+	my $key;
+	print "\nq to quit, Enter to return to menu.\n";
+	showrange($curg, $gammamin, $gammamax);
+	do {
+		$key = get_keystroke();
+		if ($key eq "h" || $key eq "\033[D") {
+			$curg -= $gammastep;
+			if ($curg < $gammamin) { $curg = $gammamin; }
+			showrange($curg, $gammamin, $gammamax);
+			setgamma($curg);
+		} elsif ($key eq "l" || $key eq "\033[C") {
+			$curg += $gammastep;
+			if ($curg > $gammamax) { $curg = $gammamax; }
+			showrange($curg, $gammamin, $gammamax);
+			setgamma($curg);
+		} elsif ($key eq "\n" || $key eq "\r") {
+			$key = "";
+		}
+	} until (lc $key eq "q" || $key eq "");
+	print "\n";
+	return $key;
+}
+sub get_display {
+	my $query = "xrandr -q | grep ' connected' | sed -e 's/ .*\$//'";
+	my $str = `$query`;
+	die "Can't get display with this command:\n$query\n"
+		if length($query) < 1;
+	$str =~ s/\s+$//;
+	return $str;
+}
+sub get_display_settings {
+	my $display = shift;
+	my $str = `xrandr -q --verbose`;
+	#$display = "DVI-I-0";
+	# Strip up until the our connected display
+	$str =~ s/^.*[\r\n]+$display/$display/s;
+	# Strip subsequent displays
+	#print "{{$str}}\n";
+	$str =~ s/[\r\n]+\S.*$//s;
+	my ($b) = ($str =~ /Brightness:\s+(.*?)\s*$/sm);
+	my ($g) = ($str =~ /Gamma:\s+(.*?)\s*$/sm);
+	#my ($c) = ($str =~ /Gamma:\s+(.*?)$/sm);
+	print "Brightness: $bcya$b$rst\n";
+	my ($gr, $gg, $gb) = split(/:/, $g);
+	print "Gamma     : ",
+		join(":", map{"$bcya$_$rst"} ($gr, $gg, $gb)), "\n";
+	#print $str;
+	return ($b, [1/$gr, 1/$gg, 1/$gb]);
+}
+
+$display = get_display();
+print "Display: $bcya$display$rst\n";
+($brightness, $gamma) = get_display_settings($display);
+
+my $key;
+do {
+	menu();
+	$key = ReadKey(0);
+	$key = lc $key;
+	if ($key eq "q") {} # quit
+	elsif ($key eq "b") { $key = brightness(); }
+	elsif ($key eq "g") { $key = gamma(); }
+	else {
+		print "${bred}I don't understand the key: $bcya$key$rst\n";
+	}
+} while (lc $key ne "q");
+ReadMode 1; # Reset tty mode before exiting
